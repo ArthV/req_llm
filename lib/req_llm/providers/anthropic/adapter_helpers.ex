@@ -198,12 +198,22 @@ defmodule ReqLLM.Providers.Anthropic.AdapterHelpers do
   Recursively remove JSON Schema keywords that strict (grammar-constrained)
   decoding does not support.
 
-  Strips `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, and
-  `maxItems` from the schema and every nested `properties`/`items` subschema.
+  Strips numeric/length/array constraints (`minimum`, `maximum`, `minLength`,
+  `maxLength`, `minItems`, `maxItems`) and the Gemini-style `propertyOrdering`
+  annotation (which `ReqLLM.Schema.to_json/1` emits but Anthropic's strict tool
+  rejects) from the schema and every nested `properties`/`items` subschema.
   """
   def strip_constraints_recursive(schema) when is_map(schema) do
     schema
-    |> Map.drop(["minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"])
+    |> Map.drop([
+      "minimum",
+      "maximum",
+      "minLength",
+      "maxLength",
+      "minItems",
+      "maxItems",
+      "propertyOrdering"
+    ])
     |> Map.new(fn
       {"properties", props} when is_map(props) ->
         {"properties", Map.new(props, fn {k, v} -> {k, strip_constraints_recursive(v)} end)}

@@ -19,7 +19,8 @@ defmodule ReqLLM.Providers.Anthropic.AdapterHelpersTest do
       }
     },
     "required" => ["options", "question"],
-    "additionalProperties" => true
+    "additionalProperties" => true,
+    "propertyOrdering" => ["options", "question"]
   }
 
   defp tool_format(extra_opts) do
@@ -38,6 +39,7 @@ defmodule ReqLLM.Providers.Anthropic.AdapterHelpersTest do
       assert formatted[:input_schema]["properties"]["options"]["minItems"] == 4
       assert formatted[:input_schema]["properties"]["options"]["maxItems"] == 4
       assert formatted[:input_schema]["additionalProperties"] == true
+      assert formatted[:input_schema]["propertyOrdering"] == ["options", "question"]
     end
 
     test "auto mode is treated as best-effort" do
@@ -59,6 +61,7 @@ defmodule ReqLLM.Providers.Anthropic.AdapterHelpersTest do
       assert options["items"] == %{"type" => "string"}
       assert formatted[:input_schema]["additionalProperties"] == false
       assert Enum.sort(formatted[:input_schema]["required"]) == ["options", "question"]
+      refute Map.has_key?(formatted[:input_schema], "propertyOrdering")
     end
 
     test "mode resolves when nested under :provider_options" do
