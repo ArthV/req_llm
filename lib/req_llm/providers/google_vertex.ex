@@ -143,9 +143,27 @@ defmodule ReqLLM.Providers.GoogleVertex do
       - `0` - first message, `1` - second, etc.
       """
     ],
+    anthropic_structured_output_mode: [
+      type: {:in, [:auto, :json_schema]},
+      default: :auto,
+      doc: """
+      Structured output strategy for Claude `:object` generation:
+      - `:auto` (default) - best-effort tool calling
+      - `:json_schema` - grammar-constrained decoding via `output_config.format`
+
+      `:json_schema` requires the `structured_outputs` partner-model feature to be
+      allow-listed by the GCP org policy (`constraints/vertexai.allowedPartnerModelFeatures`),
+      otherwise the request is rejected with HTTP 400 `FAILED_PRECONDITION`.
+      """
+    ],
     google_thinking_budget: [
       type: :non_neg_integer,
       doc: "Thinking token budget for Gemini 2.5 models (0 disables thinking, omit for dynamic)"
+    ],
+    google_thinking_level: [
+      type: {:or, [:atom, :string]},
+      doc:
+        "Thinking level for Gemini 3+ models (e.g. :low, :medium, :high, or \"low\", \"medium\", \"high\"). Passed directly to the Gemini API. Cannot be combined with google_thinking_budget."
     ],
     google_grounding: [
       type: :map,
@@ -706,19 +724,14 @@ defmodule ReqLLM.Providers.GoogleVertex do
     model = Req.Request.get_private(request, :model)
     formatter = get_formatter(model)
 
-    # Build opts with operation and context from request.options (which is a map)
     opts =
-      []
-      |> then(
-        &if request.options[:operation],
-          do: Keyword.put(&1, :operation, request.options[:operation]),
-          else: &1
-      )
-      |> then(
-        &if request.options[:context],
-          do: Keyword.put(&1, :context, request.options[:context]),
-          else: &1
-      )
+      [:operation, :context, :provider_options, :anthropic_structured_output_mode]
+      |> Enum.reduce([], fn key, acc ->
+        case request.options[key] do
+          nil -> acc
+          value -> Keyword.put(acc, key, value)
+        end
+      end)
 
     # Parse response using formatter
     result = formatter.parse_response(response.body, model, opts)

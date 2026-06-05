@@ -40,15 +40,20 @@ defmodule ReqLLM.Providers.GoogleVertex.Anthropic do
   Delegates to the native Anthropic.Context module. Vertex AI uses the
   native Anthropic Messages API format directly.
 
-  For :object operations, creates a synthetic "structured_output" tool to
-  leverage Claude's tool-calling for structured JSON output.
+  For `:object` operations the structured-output strategy depends on
+  `anthropic_structured_output_mode` (resolved via `AdapterHelpers.structured_output_mode/1`):
+
+    * `:json_schema` — sends `output_config.format` and leaves the tools alone;
+      the model returns the object as message text (grammar-constrained).
+    * otherwise (`:auto`) — injects a synthetic `structured_output` tool and
+      forces tool choice, relying on Claude's best-effort tool calling.
   """
   def format_request(_model_id, context, opts) do
     operation = opts[:operation]
+    mode = AdapterHelpers.structured_output_mode(opts)
 
-    # For :object operation, we need to inject the structured_output tool
     {context, opts} =
-      if operation == :object do
+      if operation == :object and mode != :json_schema do
         AdapterHelpers.prepare_structured_output_context(context, opts)
       else
         {context, opts}
@@ -78,8 +83,22 @@ defmodule ReqLLM.Providers.GoogleVertex.Anthropic do
     |> AdapterHelpers.maybe_add_param(:stop_sequences, opts[:stop_sequences])
     |> AdapterHelpers.maybe_add_thinking(opts)
     |> maybe_add_tools(opts)
+    |> maybe_add_output_format(operation, mode, opts)
     |> Anthropic.maybe_apply_prompt_caching(opts)
   end
+
+  defp maybe_add_output_format(body, :object, :json_schema, opts) do
+    compiled_schema = Keyword.fetch!(opts, :compiled_schema)
+
+    Map.put(body, :output_config, %{
+      format: %{
+        type: "json_schema",
+        schema: AdapterHelpers.strict_json_schema(compiled_schema)
+      }
+    })
+  end
+
+  defp maybe_add_output_format(body, _operation, _mode, _opts), do: body
 
   # Add tools from opts to request body
   defp maybe_add_tools(body, opts) do
@@ -107,7 +126,11 @@ defmodule ReqLLM.Providers.GoogleVertex.Anthropic do
 
   Delegates to the native Anthropic.Response module.
 
-  For :object operations, extracts the structured output from the tool call.
+  For `:object` operations, extracts the structured output: from the message
+  text in `:json_schema` mode (`output_config.format`), or from the
+  `structured_output` tool call otherwise. The mode is read from `opts`, so the
+  caller must forward `anthropic_structured_output_mode` into response decoding
+  (see `decode_response/1`).
   """
   def parse_response(body, %LLMDB.Model{} = vertex_model, opts) when is_map(body) do
     # Create an Anthropic model struct for decode_response
@@ -124,12 +147,17 @@ defmodule ReqLLM.Providers.GoogleVertex.Anthropic do
         input_context = opts[:context] || %ReqLLM.Context{messages: []}
         merged_response = ReqLLM.Context.merge_response(input_context, response)
 
-        # For :object operation, extract structured output from tool call
         final_response =
-          if opts[:operation] == :object do
-            AdapterHelpers.extract_and_set_object(merged_response)
-          else
-            merged_response
+          cond do
+            opts[:operation] == :object and
+                AdapterHelpers.structured_output_mode(opts) == :json_schema ->
+              extract_object_from_text(merged_response, opts)
+
+            opts[:operation] == :object ->
+              AdapterHelpers.extract_and_set_object(merged_response)
+
+            true ->
+              merged_response
           end
 
         {:ok, final_response}
@@ -137,6 +165,16 @@ defmodule ReqLLM.Providers.GoogleVertex.Anthropic do
       error ->
         error
     end
+  end
+
+  defp extract_object_from_text(response, opts) do
+    object =
+      case ReqLLM.JSON.decode(ReqLLM.Response.text(response), opts) do
+        {:ok, decoded} -> decoded
+        _ -> nil
+      end
+
+    %{response | object: object}
   end
 
   @doc """

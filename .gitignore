@@ -32,7 +32,6 @@ req_llm-*.tar
 
 # Claude Code
 .claude/
-.beads/
 
 # Language Servers
 .elixir_ls
